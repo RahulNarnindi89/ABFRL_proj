@@ -4,3 +4,6 @@
 *.Rproj
 ~$*.xlsx        # Excel temp files (created when a file is open)
 Data/
+.Rproj.user/
+.Rhistory
+.RData
