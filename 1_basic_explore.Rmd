@@ -1,0 +1,2053 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code.
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*.
+
+
+
+```{r}
+# clearing the workspace
+rm(list=ls(all=TRUE))
+```
+
+```{r}
+
+view_flag<-TRUE
+start_date <- "2014-08-01"
+end_date <- "2019-12-01"
+
+```
+
+```{r}
+# Loading the libraries that may prove useful
+library("readxl")
+library("stringi")
+library(tidyverse)
+library(here)
+library(ggplot2)
+library(skimr)
+
+library(dplyr)
+library(tidyr)
+library(sqldf)
+library(kableExtra)
+library(plm)
+library(lmtest)
+
+
+# library(xlsx)
+library(reshape2)
+library(tibble)
+library(panelr)
+library(multiway)
+library(stringr)
+library(zoo)
+library(arsenal)
+library("data.table")
+library(readr)
+library(sqldf)
+library(stringr)
+library(fuzzyjoin)
+library(lubridate)
+library(MatchIt)
+library(janitor)
+library(forcats)
+library(officer)
+library(magrittr)
+library(gridExtra)
+library(grid)
+
+theme_set(theme_minimal(base_size = 12))
+```
+
+```{r setup}
+# This sets the working directory for the subsequent chunks but not the current chunk. Its a bit weird
+knitr::opts_knit$set(root.dir = normalizePath("C:/Users/rahul/OneDrive - BITSoM/Desktop/Phd/ABFRL/R_directory"))
+
+
+```
+
+
+```{r}
+
+store_list <- read_excel("C:/Users/rahul/OneDrive - BITSoM/Desktop/PhD/ABFRL/R_directory/Data/Swayam_Sharma_Store Master - PT.xlsx")
+
+#clean names
+store_list <- store_list %>%
+  clean_names()
+
+
+n_distinct(store_list$site_code)
+
+
+#summary df of site_code per city
+city_summary <- store_list %>%
+  group_by(city) %>%
+  summarise(num_stores = n_distinct(site_code)) %>%
+  arrange(desc(num_stores))
+
+
+
+
+p_hist <- ggplot(city_summary, aes(x = num_stores)) +
+  geom_histogram(binwidth = 1, fill = "steelblue", color = "white") +
+  labs(
+    title = "Histogram of Number of Stores per City",
+    x = "Number of Stores",
+    y = "Count of Cities"
+  ) +
+  theme_minimal()
+
+
+
+
+hist_data2 <- ggplot_build(p_hist)$data[[1]]
+
+
+p_hist <- p_hist+
+  geom_text(
+    data = hist_data2,
+    aes(x = x, y = count, label = count),
+    vjust = -0.5,
+    size = 3
+  ) 
+
+
+print(p_hist)
+
+out_folder <- "C:/Users/rahul/OneDrive - BITSoM/Desktop/Phd/ABFRL/R_directory/ppt_pics1"
+
+# Auto-create folder if missing
+if (!dir.exists(out_folder)) {
+  dir.create(out_folder, recursive = TRUE)
+}
+
+ggsave(
+  filename = "1_hist_num_stores.png",
+  plot = p_hist,
+  path = out_folder,   # <-- change folder here
+  width = 8,
+  height = 5,
+  dpi = 300
+)
+
+
+
+```
+
+
+```{r}
+#------------#
+# 1. Metrics #
+#------------#
+
+# city_summary has columns: city, num_stores
+
+# Mode helper
+get_mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+n_cities <- nrow(city_summary)
+
+# City with highest stores
+idx_max      <- which.max(city_summary$num_stores)
+city_max     <- city_summary$city[idx_max]
+max_stores   <- city_summary$num_stores[idx_max]
+
+median_stores <- median(city_summary$num_stores, na.rm = TRUE)
+mode_stores   <- get_mode(city_summary$num_stores)
+mean_stores   <- mean(city_summary$num_stores, na.rm = TRUE)
+total_stores  <- sum(city_summary$num_stores, na.rm = TRUE)
+
+metrics_df <- data.frame(
+  Metric = c(
+    "Number of cities",
+    "Total stores across all cities",
+    "City with highest stores",
+    "Number of stores in that city",
+    "Median stores per city",
+    "Mode of stores per city",
+    "Mean stores per city"
+  ),
+  Value = c(
+    n_cities,
+    total_stores,
+    city_max,
+    max_stores,
+    round(median_stores, 2),
+    mode_stores,
+    round(mean_stores, 2)
+  ),
+  stringsAsFactors = FALSE
+)
+
+#--------------------------#
+# 2. Create table as grob  #
+#--------------------------#
+
+tbl_grob <- tableGrob(
+  metrics_df,
+  rows = NULL,                 # no row names
+  theme = ttheme_minimal(      # cleaner look
+    core = list(fg_params = list(cex = 0.9)),
+    colhead = list(fg_params = list(fontface = "bold"))
+  )
+)
+
+#-------------------------------------------#
+# 3. Save table as PNG in the same folder   #
+#-------------------------------------------#
+
+# Use the same out_folder you used earlier
+# Example:
+# out_folder <- "C:/Users/Rahul/Documents/plots/"
+
+if (!dir.exists(out_folder)) {
+  dir.create(out_folder, recursive = TRUE)
+}
+
+png(
+  filename = file.path(out_folder, "2_city_summary_metrics.png"),
+  width = 1600,
+  height = 900,
+  res = 150
+)
+
+
+grid.draw(tbl_grob)
+dev.off()
+
+
+```
+
+
+```{r}
+
+
+state_summary <- store_list %>%
+  group_by(state) %>%
+  summarise(num_stores = n()) %>%
+  ungroup()
+bin_width <- 10
+min_val   <- min(state_summary$num_stores, na.rm = TRUE)
+max_val   <- max(state_summary$num_stores, na.rm = TRUE)
+
+break_min <- floor(min_val / bin_width) * bin_width
+break_max <- ceiling(max_val / bin_width) * bin_width
+
+# 2. Histogram with correct bins, correct labels, correct x-axis
+p_state_hist <- ggplot(state_summary, aes(x = num_stores)) +
+  
+  # Histogram bars
+  geom_histogram(
+    binwidth = bin_width,
+    boundary = 0,
+    closed   = "right",
+    fill     = "steelblue",
+    color    = "white"
+  ) +
+  
+  # Labels using new after_stat() syntax
+  stat_bin(
+    binwidth = bin_width,
+    boundary = 0,
+    closed   = "right",
+    geom     = "text",
+    aes(
+      y = after_stat(count),
+      label = after_stat(count)
+    ),
+    vjust = -0.5,
+    size  = 3
+  ) +
+  
+  # X-axis ticks at bin boundaries
+  scale_x_continuous(
+    breaks = seq(break_min, break_max, by = bin_width),
+    limits = c(break_min, break_max)
+  ) +
+  
+  labs(
+    title = "Distribution of Stores per State",
+    x     = "Number of Stores",
+    y     = "Count of States"
+  ) +
+  
+  theme_minimal()
+
+p_state_hist
+
+
+ggsave(
+  filename = "3_hist_stores_per_state.png",
+  plot = p_state_hist,
+  path = out_folder,
+  width = 8,
+  height = 5,
+  dpi = 300
+)
+```
+
+```{r}
+get_mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+# Metrics
+n_states       <- nrow(state_summary)
+total_stores   <- sum(state_summary$num_stores, na.rm = TRUE)
+median_stores  <- median(state_summary$num_stores, na.rm = TRUE)
+mean_stores    <- mean(state_summary$num_stores, na.rm = TRUE)
+mode_stores    <- get_mode(state_summary$num_stores)
+
+idx_max        <- which.max(state_summary$num_stores)
+state_max      <- state_summary$state[idx_max]
+max_stores     <- state_summary$num_stores[idx_max]
+
+# Summary table dataframe
+state_metrics_df <- data.frame(
+  Metric = c(
+    "Number of states",
+    "Total stores across all states",
+    "State with highest stores",
+    "Number of stores in that state",
+    "Median stores per state",
+    "Mean stores per state",
+    "Mode stores per state"
+  ),
+  Value = c(
+    n_states,
+    total_stores,
+    state_max,
+    max_stores,
+    round(median_stores, 2),
+    round(mean_stores, 2),
+    mode_stores
+  ),
+  stringsAsFactors = FALSE
+)
+
+state_metrics_df
+```
+
+
+```{r}
+
+state_tbl_grob <- tableGrob(
+  state_metrics_df,
+  rows = NULL,
+  theme = ttheme_minimal(
+    core    = list(fg_params = list(cex = 0.9)),
+    colhead = list(fg_params = list(fontface = "bold"))
+  )
+)
+
+# Display in RStudio viewer
+grid.newpage()
+grid.draw(state_tbl_grob)
+
+if (!dir.exists(out_folder)) {
+  dir.create(out_folder, recursive = TRUE)
+}
+
+png(
+  filename = file.path(out_folder, "4_state_summary_metrics.png"),
+  width  = 1600,
+  height = 900,
+  res    = 150
+)
+
+gridExtra::grid.table(state_metrics_df)
+
+dev.off()
+
+```
+
+```{r}
+type_summary <- store_list %>%
+  group_by(type) %>%
+  summarise(num_stores = n()) %>%
+  ungroup()
+
+#-------------------------------------------------
+# 2. Save the type_summary table as PNG
+#-------------------------------------------------
+
+# out_folder already exists from previous code
+# e.g. out_folder <- "C:/Users/Rahul/Documents/plots/"
+
+if (!dir.exists(out_folder)) {
+  dir.create(out_folder, recursive = TRUE)
+}
+
+png(
+  filename = file.path(out_folder, "5_type_summary_table.png"),
+  width  = 1600,
+  height = 900,
+  res    = 150
+)
+
+gridExtra::grid.table(type_summary)
+
+dev.off()
+```
+
+```{r}
+classification_summary <- store_list %>%
+  group_by(store_classification) %>%
+  summarise(num_stores = n()) %>%
+  ungroup()
+
+#-------------------------------------------------
+# 2. Save the classification_summary table as PNG
+#-------------------------------------------------
+
+# Assumes out_folder already defined earlier
+# e.g. out_folder <- "C:/Users/Rahul/Documents/plots/"
+
+if (!dir.exists(out_folder)) {
+  dir.create(out_folder, recursive = TRUE)
+}
+
+png(
+  filename = file.path(out_folder, "6_classification_summary_table.png"),
+  width  = 1600,
+  height = 900,
+  res    = 150
+)
+
+gridExtra::grid.table(classification_summary)
+
+dev.off()
+```
+
+```{r}
+
+area_summary <- store_list %>%
+  group_by(store_classification) %>%
+  summarise(
+    count_stores   = n(),
+    min_area_sqft  = min(carpet_area_sq_ft, na.rm = TRUE),
+    median_area_sqft = median(carpet_area_sq_ft, na.rm = TRUE),
+    mean_area_sqft   = round(mean(carpet_area_sq_ft, na.rm = TRUE), 2),
+    max_area_sqft  = max(carpet_area_sq_ft, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+#-------------------------------------------------
+# 2. Save the table as PNG
+#-------------------------------------------------
+
+# out_folder already defined from earlier code
+# e.g. out_folder <- "C:/Users/Rahul/Documents/plots/"
+
+if (!dir.exists(out_folder)) {
+  dir.create(out_folder, recursive = TRUE)
+}
+
+png(
+  filename = file.path(out_folder, "7_classification_vs_area_table.png"),
+  width  = 1800,
+  height = 900,
+  res    = 150
+)
+
+gridExtra::grid.table(area_summary)
+
+dev.off()
+
+```
+
+```{r}
+
+df_NOB <- read_excel("C:/Users/rahul/OneDrive - BITSoM/Desktop/PhD/ABFRL/R_directory/Data/Swayam_Sharma_Footfall & NOB.xlsx", 
+    sheet = "DATA")
+df_NOB <- df_NOB %>%  clean_names()
+
+
+df_NOB <- merge(df_NOB, store_list[,c("site_code","state","type","carpet_area_sq_ft","store_classification")], by="site_code", all.x=TRUE)
+
+
+
+```
+
+
+```{r}
+
+
+#-------------------------------------------------
+# 1. Overall metrics from df_NOB
+#-------------------------------------------------
+
+overall_metrics <- data.frame(
+  Metric = c(
+    "Number of stores (unique site_code)",
+    "Number of unique weeks",
+    "Grand mean NOB",
+    "Grand mean Footfall"
+  ),
+  Value = c(
+    n_distinct(df_NOB$site_code),
+    n_distinct(df_NOB$week),
+    round(mean(df_NOB$nob, na.rm = TRUE), 2),
+    round(mean(df_NOB$footfall, na.rm = TRUE), 2)
+  ),
+  stringsAsFactors = FALSE
+)
+
+#-------------------------------------------------
+# 2. Save table as PNG
+#-------------------------------------------------
+
+# target folder
+out_folder <- "ppt_pics1"
+
+# auto-create
+if (!dir.exists(out_folder)) {
+  dir.create(out_folder, recursive = TRUE)
+}
+
+png(
+  filename = file.path(out_folder, "8_overall_metrics_table.png"),
+  width  = 1600,
+  height = 900,
+  res    = 150
+)
+
+gridExtra::grid.table(overall_metrics)
+
+dev.off()
+```
+
+```{r}
+
+#-------------------------------------------------
+# 1. Build scatter plot
+#-------------------------------------------------
+
+p_scatter <- ggplot(df_NOB, aes(x = footfall, y = nob)) +
+  geom_point(alpha = 0.6) +                       # points with slight transparency
+  geom_smooth(method = "lm", se = FALSE) +        # regression line
+  labs(
+    title = "Scatter Plot: Footfall vs NOB",
+    x = "Footfall",
+    y = "NOB"
+  ) +
+  theme_minimal()
+
+#-------------------------------------------------
+# 2. Save as PNG (prefix 9_)
+#-------------------------------------------------
+
+out_folder <- "ppt_pics1"
+
+if (!dir.exists(out_folder)) {
+  dir.create(out_folder, recursive = TRUE)
+}
+
+ggsave(
+  filename = "9_scatter_nob_vs_footfall.png",
+  plot     = p_scatter,
+  path     = out_folder,
+  width    = 8,
+  height   = 5,
+  dpi      = 300
+)
+
+```
+
+```{r}
+
+View(df_NOB[is.na(df_NOB$state),])
+
+missing_stuff <- df_NOB[is.na(df_NOB$state),]
+
+city_state_lookup <- df_NOB %>%
+  filter(!is.na(state), state != "") %>%
+  count(city, state) %>%
+  group_by(city) %>%
+  slice_max(n, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  select(city, state_inferred = state)
+
+df_NOB_filled <- df_NOB %>%
+  left_join(city_state_lookup, by = "city") %>%
+  mutate(
+    state = dplyr::coalesce(state, state_inferred)
+  ) %>%
+  select(-state_inferred)
+
+
+#-------------------------------------------------
+# 2. Number of malls (unique site_code) per state
+#-------------------------------------------------
+
+state_malls <- df_NOB_filled %>%
+  filter(!is.na(state), state != "") %>%
+  distinct(state, site_code) %>%
+  count(state, name = "num_malls")
+
+#-------------------------------------------------
+# 3. Summary metrics table
+#-------------------------------------------------
+
+# Helper: mode
+get_mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+n_states      <- nrow(state_malls)
+total_malls   <- sum(state_malls$num_malls)
+mean_malls    <- round(mean(state_malls$num_malls), 2)
+median_malls  <- round(median(state_malls$num_malls), 2)
+mode_malls    <- get_mode(state_malls$num_malls)
+min_malls     <- min(state_malls$num_malls)
+max_malls     <- max(state_malls$num_malls)
+
+idx_max       <- which.max(state_malls$num_malls)
+state_max     <- state_malls$state[idx_max]
+malls_state_max <- state_malls$num_malls[idx_max]
+
+state_mall_metrics <- data.frame(
+  Metric = c(
+    "Number of states",
+    "Total malls (unique site_code)",
+    "Mean malls per state",
+    "Median malls per state",
+    "Mode malls per state",
+    "Minimum malls per state",
+    "Maximum malls per state",
+    "State with highest malls",
+    "Malls in highest state"
+  ),
+  Value = c(
+    n_states,
+    total_malls,
+    mean_malls,
+    median_malls,
+    mode_malls,
+    min_malls,
+    max_malls,
+    state_max,
+    malls_state_max
+  ),
+  stringsAsFactors = FALSE
+)
+
+#-------------------------------------------------
+# 4. Save metrics table as PNG (prefix 10_)
+#-------------------------------------------------
+
+out_folder <- "ppt_pics1"
+
+if (!dir.exists(out_folder)) {
+  dir.create(out_folder, recursive = TRUE)
+}
+
+png(
+  filename = file.path(out_folder, "10_state_mall_metrics_table.png"),
+  width  = 1600,
+  height = 900,
+  res    = 150
+)
+
+gridExtra::grid.table(state_mall_metrics)
+
+dev.off()
+
+
+```
+
+
+```{r}
+#-------------------------------------------------
+# 1. Number of malls (unique site_code) per city
+#-------------------------------------------------
+
+city_malls <- df_NOB %>%
+  distinct(city, site_code) %>%
+  count(city, name = "num_malls")
+
+#-------------------------------------------------
+# 2. Summary metrics table
+#-------------------------------------------------
+
+# Helper: mode
+get_mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+n_cities        <- nrow(city_malls)
+total_malls     <- sum(city_malls$num_malls)
+mean_malls      <- round(mean(city_malls$num_malls), 2)
+median_malls    <- round(median(city_malls$num_malls), 2)
+mode_malls      <- get_mode(city_malls$num_malls)
+min_malls       <- min(city_malls$num_malls)
+max_malls       <- max(city_malls$num_malls)
+
+idx_max         <- which.max(city_malls$num_malls)
+city_max        <- city_malls$city[idx_max]
+malls_city_max  <- city_malls$num_malls[idx_max]
+
+city_mall_metrics <- data.frame(
+  Metric = c(
+    "Number of cities",
+    "Total malls (unique site_code)",
+    "Mean malls per city",
+    "Median malls per city",
+    "Mode malls per city",
+    "Minimum malls per city",
+    "Maximum malls per city",
+    "City with highest malls",
+    "Malls in highest city"
+  ),
+  Value = c(
+    n_cities,
+    total_malls,
+    mean_malls,
+    median_malls,
+    mode_malls,
+    min_malls,
+    max_malls,
+    city_max,
+    malls_city_max
+  ),
+  stringsAsFactors = FALSE
+)
+
+#-------------------------------------------------
+# 3. Save metrics table as PNG (prefix 11_)
+#-------------------------------------------------
+
+out_folder <- "ppt_pics1"
+
+if (!dir.exists(out_folder)) {
+  dir.create(out_folder, recursive = TRUE)
+}
+
+png(
+  filename = file.path(out_folder, "11_city_mall_metrics_table.png"),
+  width  = 1600,
+  height = 900,
+  res    = 150
+)
+
+gridExtra::grid.table(city_mall_metrics)
+
+dev.off()
+```
+
+```{r}
+
+
+#-------------------------------------------------
+# 1. Count stores per type (including NA as a bar)
+#-------------------------------------------------
+
+type_counts <- df_NOB %>%
+  mutate(
+    type_clean = dplyr::case_when(
+      is.na(type)        ~ "Missing",
+      type == "NA"       ~ "Missing",   # if some are literal "NA"
+      TRUE               ~ type
+    )
+  ) %>%
+  distinct(site_code, type_clean) %>%   # unique stores by type
+  count(type_clean, name = "num_stores") %>%
+  arrange(desc(num_stores))
+
+#-------------------------------------------------
+# 2. Bar chart with labels on bars
+#-------------------------------------------------
+
+p_type_bar <- ggplot(type_counts, aes(x = type_clean, y = num_stores)) +
+  geom_col() +
+  geom_text(
+    aes(label = num_stores),
+    vjust = -0.3,
+    size = 3
+  ) +
+  labs(
+    title = "Number of Stores by Type",
+    x = "Store Type",
+    y = "Number of Stores"
+  ) +
+  theme_minimal()
+
+p_type_bar
+
+#-------------------------------------------------
+# 3. Save the bar chart as PNG (prefix 12_)
+#-------------------------------------------------
+
+out_folder <- "ppt_pics1"
+
+if (!dir.exists(out_folder)) {
+  dir.create(out_folder, recursive = TRUE)
+}
+
+ggsave(
+  filename = "12_store_type_distribution.png",
+  plot     = p_type_bar,
+  path     = out_folder,
+  width    = 8,
+  height   = 5,
+  dpi      = 300
+)
+```
+
+
+```{r}
+#-------------------------------------------------
+# 1. Count stores per store_classification (incl. missing)
+#-------------------------------------------------
+
+classification_counts <- df_NOB %>%
+  mutate(
+    classification_clean = dplyr::case_when(
+      is.na(store_classification)          ~ "Missing",
+      store_classification == "NA"         ~ "Missing",  # literal "NA" strings
+      TRUE                                 ~ store_classification
+    )
+  ) %>%
+  distinct(site_code, classification_clean) %>%   # unique stores by classification
+  count(classification_clean, name = "num_stores") %>%
+  arrange(desc(num_stores))
+
+#-------------------------------------------------
+# 2. Bar chart with labels
+#-------------------------------------------------
+
+p_class_bar <- ggplot(classification_counts,
+                      aes(x = classification_clean, y = num_stores)) +
+  geom_col() +
+  geom_text(
+    aes(label = num_stores),
+    vjust = -0.3,
+    size = 3
+  ) +
+  labs(
+    title = "Number of Stores by Store Classification",
+    x = "Store Classification",
+    y = "Number of Stores"
+  ) +
+  theme_minimal()
+
+#-------------------------------------------------
+# 3. Save the bar chart as PNG (prefix 13_)
+#-------------------------------------------------
+
+out_folder <- "ppt_pics1"
+
+if (!dir.exists(out_folder)) {
+  dir.create(out_folder, recursive = TRUE)
+}
+
+ggsave(
+  filename = "13_store_classification_distribution.png",
+  plot     = p_class_bar,
+  path     = out_folder,
+  width    = 8,
+  height   = 5,
+  dpi      = 300
+)
+```
+
+```{r}
+#-------------------------------------------------
+# 1. Filter rows with valid store classification
+#-------------------------------------------------
+
+df_area_class <- df_NOB %>%
+  filter(
+    !is.na(store_classification),
+    store_classification != "",
+    store_classification != "NA"
+  )
+
+#-------------------------------------------------
+# 2. Boxplot: carpet area by classification
+#-------------------------------------------------
+
+p_box_area <- ggplot(df_area_class,
+                     aes(x = store_classification,
+                         y = carpet_area_sq_ft)) +
+  geom_boxplot() +
+  labs(
+    title = "Carpet Area Distribution by Store Classification",
+    x = "Store Classification",
+    y = "Carpet Area (sq ft)"
+  ) +
+  theme_minimal()
+
+#-------------------------------------------------
+# 3. Save PNG (prefix 14_)
+#-------------------------------------------------
+
+out_folder <- "ppt_pics1"
+
+if (!dir.exists(out_folder)) {
+  dir.create(out_folder, recursive = TRUE)
+}
+
+ggsave(
+  filename = "14_area_by_store_classification_boxplot.png",
+  plot     = p_box_area,
+  path     = out_folder,
+  width    = 8,
+  height   = 5,
+  dpi      = 300
+)
+```
+
+
+
+```{r}
+
+#-------------------------------------------------
+# 1. Compute average footfall per store
+#    Drop rows with missing carpet area or footfall
+#-------------------------------------------------
+
+df_area_footfall <- df_NOB %>%
+  filter(
+    !is.na(carpet_area_sq_ft),
+    !is.na(footfall)
+  ) %>%
+  group_by(site_code, carpet_area_sq_ft) %>%
+  summarise(
+    avg_footfall = mean(footfall, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#-------------------------------------------------
+# 2. Scatter plot: carpet area vs avg footfall
+#-------------------------------------------------
+
+p_scatter_area <- ggplot(df_area_footfall,
+                         aes(x = carpet_area_sq_ft,
+                             y = avg_footfall)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(
+    title = "Carpet Area vs Average Footfall (per Store)",
+    x = "Carpet Area (sq ft)",
+    y = "Average Footfall per Store"
+  ) +
+  theme_minimal()
+
+#-------------------------------------------------
+# 3. Save PNG (prefix 15_)
+#-------------------------------------------------
+
+out_folder <- "ppt_pics1"
+
+if (!dir.exists(out_folder)) {
+  dir.create(out_folder, recursive = TRUE)
+}
+
+ggsave(
+  filename = "15_carpet_area_vs_avg_footfall.png",
+  plot     = p_scatter_area,
+  path     = out_folder,
+  width    = 8,
+  height   = 5,
+  dpi      = 300
+)
+```
+
+```{r}
+#-------------------------------------------------
+# 1. Compute average NOB per store
+#    Drop missing carpet area or nob
+#-------------------------------------------------
+
+df_area_nob <- df_NOB %>%
+  filter(
+    !is.na(carpet_area_sq_ft),
+    !is.na(nob)
+  ) %>%
+  group_by(site_code, carpet_area_sq_ft) %>%
+  summarise(
+    avg_nob = mean(nob, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#-------------------------------------------------
+# 2. Scatter plot: carpet area vs avg nob
+#-------------------------------------------------
+
+p_scatter_nob <- ggplot(df_area_nob,
+                        aes(x = carpet_area_sq_ft,
+                            y = avg_nob)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(
+    title = "Carpet Area vs Average NOB (per Store)",
+    x = "Carpet Area (sq ft)",
+    y = "Average NOB per Store"
+  ) +
+  theme_minimal()
+
+#-------------------------------------------------
+# 3. Save PNG (prefix 16_)
+#-------------------------------------------------
+
+out_folder <- "ppt_pics1"
+
+if (!dir.exists(out_folder)) {
+  dir.create(out_folder, recursive = TRUE)
+}
+
+ggsave(
+  filename = "16_carpet_area_vs_avg_nob.png",
+  plot     = p_scatter_nob,
+  path     = out_folder,
+  width    = 8,
+  height   = 5,
+  dpi      = 300
+)
+
+
+```
+
+```{r}
+
+
+# Count observations per store
+store_obs <- df_NOB %>%
+  group_by(site_code) %>%
+  summarise(n_obs = n(), .groups = "drop")
+
+# Keep stores with at least, say, 20 weeks of data
+# and then take top 16 by number of observations
+stores_keep <- store_obs %>%
+  filter(n_obs >= 20) %>%
+  arrange(desc(n_obs)) %>%
+  slice_head(n = 16) %>%          # change 16 -> 9, 12, etc. as you like
+  pull(site_code)
+
+df_panel <- df_NOB %>%
+  filter(site_code %in% stores_keep,
+         !is.na(footfall),
+         !is.na(nob))
+
+#-------------------------------------------------
+# 2. Faceted scatter plot: one panel per store
+#-------------------------------------------------
+
+p_panel <- ggplot(df_panel, aes(x = footfall, y = nob)) +
+  geom_point(alpha = 0.5, size = 0.7) +
+  geom_smooth(method = "lm", se = FALSE, size = 0.5) +
+  facet_wrap(~ site_code, scales = "free") +
+  labs(
+    title = "NOB vs Footfall by Store (Selected Stores)",
+    x = "Footfall",
+    y = "NOB"
+  ) +
+  theme_minimal() +
+  theme(
+    strip.text = element_text(size = 8),
+    axis.text.x = element_text(size = 6),
+    axis.text.y = element_text(size = 6)
+  )
+
+p_panel
+
+out_folder <- "ppt_pics1"
+if (!dir.exists(out_folder)) dir.create(out_folder, recursive = TRUE)
+
+ggsave(
+  filename = "9c_nob_vs_footfall_store_panels.png",
+  plot     = p_panel,
+  path     = out_folder,
+  width    = 10,
+  height   = 7,
+  dpi      = 300
+)
+```
+
+```{r}
+#-------------------------------------------------
+# 1. Demean NOB and Footfall within each store
+#-------------------------------------------------
+
+df_demeaned <- df_NOB %>%
+  filter(!is.na(nob), !is.na(footfall)) %>%
+  group_by(site_code) %>%
+  mutate(
+    nob_dm      = nob - mean(nob, na.rm = TRUE),
+    footfall_dm = footfall - mean(footfall, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+#-------------------------------------------------
+# 2. Scatter plot of demeaned values
+#-------------------------------------------------
+
+p_dm_scatter <- ggplot(df_demeaned,
+                       aes(x = footfall_dm, y = nob_dm)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(
+    title = "Demeaned Scatter: Footfall vs NOB (Within-Store)",
+    x = "Demeaned Footfall",
+    y = "Demeaned NOB"
+  ) +
+  theme_minimal()
+
+#-------------------------------------------------
+# 3. Save PNG (prefix 9b_)
+#-------------------------------------------------
+
+out_folder <- "ppt_pics1"
+if (!dir.exists(out_folder)) dir.create(out_folder, recursive = TRUE)
+
+ggsave(
+  filename = "9b_demeaned_scatter_footfall_vs_nob.png",
+  plot     = p_dm_scatter,
+  path     = out_folder,
+  width    = 8,
+  height   = 5,
+  dpi      = 300
+)
+
+
+```
+
+```{r}
+#use only first 4 chars in fy_year
+df_NOB <- df_NOB %>%
+  mutate(fy_year_short = str_sub(fy_year, 1, 4))
+
+#as.numeric
+df_NOB <- df_NOB %>%
+  mutate(fy_year_num = as.numeric(fy_year_short))
+
+# replace fy_year with fy_year_num
+df_NOB <- df_NOB %>%
+  select(-fy_year, -fy_year_short) %>%
+  rename(fy_year = fy_year_num)
+
+
+
+```
+
+```{r}
+df_wave <- df_NOB %>%
+  # Drop rows where week or fy_year is missing
+  filter(!is.na(fy_year), !is.na(week)) %>%
+  mutate(
+    # Extract numeric week index from "Week01", "Week02", ...
+    week_num = as.integer(str_remove(week, "^Week")),
+    # Make sure fy_year is numeric; if it's a factor/character, convert
+    fy_year_num = as.numeric(as.character(fy_year))
+  )
+
+# Handle case where conversion fails
+if (any(is.na(df_wave$fy_year_num))) {
+  stop("fy_year could not be safely converted to numeric. Check its format.")
+}
+
+# Get max week and min year to build continuous wave index
+max_week   <- max(df_wave$week_num, na.rm = TRUE)
+min_year   <- min(df_wave$fy_year_num, na.rm = TRUE)
+
+df_wave <- df_wave %>%
+  mutate(
+    wave = (fy_year_num - min_year) * max_week + week_num
+  )
+
+#-------------------------------------------------
+# 2. Demean footfall and nob within each store
+#-------------------------------------------------
+
+df_wave_dm <- df_wave %>%
+  filter(!is.na(footfall), !is.na(nob)) %>%
+  group_by(site_code) %>%
+  mutate(
+    footfall_dm = footfall - mean(footfall, na.rm = TRUE),
+    nob_dm      = nob      - mean(nob,      na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+#-------------------------------------------------
+# 3. Aggregate to average demeaned values per wave
+#-------------------------------------------------
+
+wave_trends <- df_wave_dm %>%
+  group_by(wave) %>%
+  summarise(
+    footfall_dm_mean = mean(footfall_dm, na.rm = TRUE),
+    nob_dm_mean      = mean(nob_dm,      na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#-------------------------------------------------
+# 4. Plot 1: wave vs average demeaned footfall
+#-------------------------------------------------
+
+p_wave_footfall <- ggplot(wave_trends,
+                          aes(x = wave, y = footfall_dm_mean)) +
+  geom_line() +
+  geom_smooth(se = FALSE, method = "loess") +
+  labs(
+    title = "Time Trend: Demeaned Footfall (Average Across Stores)",
+    x = "Wave (Continuous FY Year + Week)",
+    y = "Average Demeaned Footfall"
+  ) +
+  theme_minimal()
+
+#-------------------------------------------------
+# 5. Plot 2: wave vs average demeaned NOB
+#-------------------------------------------------
+
+p_wave_nob <- ggplot(wave_trends,
+                     aes(x = wave, y = nob_dm_mean)) +
+  geom_line() +
+  geom_smooth(se = FALSE, method = "loess") +
+  labs(
+    title = "Time Trend: Demeaned NOB (Average Across Stores)",
+    x = "Wave (Continuous FY Year + Week)",
+    y = "Average Demeaned NOB"
+  ) +
+  theme_minimal()
+
+#-------------------------------------------------
+# 6. Save both plots as PNGs with prefixes 17_ and 18_
+#-------------------------------------------------
+
+out_folder <- "ppt_pics1"
+if (!dir.exists(out_folder)) dir.create(out_folder, recursive = TRUE)
+
+ggsave(
+  filename = "17_wave_vs_demeaned_footfall.png",
+  plot     = p_wave_footfall,
+  path     = out_folder,
+  width    = 8,
+  height   = 5,
+  dpi      = 300
+)
+
+ggsave(
+  filename = "18_wave_vs_demeaned_nob.png",
+  plot     = p_wave_nob,
+  path     = out_folder,
+  width    = 8,
+  height   = 5,
+  dpi      = 300
+)
+```
+
+
+```{r}
+#-------------------------------------------------
+# 1. Build continuous wave variable (fy_year + week)
+#-------------------------------------------------
+
+df_wave <- df_NOB %>%
+  filter(!is.na(fy_year), !is.na(week)) %>%
+  mutate(
+    week_num    = as.integer(str_remove(week, "^Week")),
+    fy_year_num = as.numeric(as.character(fy_year))
+  )
+
+if (any(is.na(df_wave$fy_year_num))) {
+  stop("fy_year could not be safely converted to numeric. Check its format.")
+}
+
+max_week <- max(df_wave$week_num, na.rm = TRUE)
+min_year <- min(df_wave$fy_year_num, na.rm = TRUE)
+
+df_wave <- df_wave %>%
+  mutate(
+    wave = (fy_year_num - min_year) * max_week + week_num
+  )
+
+#-------------------------------------------------
+# 2. Demean NOB and Footfall within each store
+#-------------------------------------------------
+
+df_wave_dm <- df_wave %>%
+  filter(!is.na(footfall), !is.na(nob)) %>%
+  group_by(site_code) %>%
+  mutate(
+    footfall_dm = footfall - mean(footfall, na.rm = TRUE),
+    nob_dm      = nob      - mean(nob,      na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+#-------------------------------------------------
+# 3. Scatter: wave vs demeaned Footfall (all store-weeks)
+#-------------------------------------------------
+
+p_wave_footfall_pts <- ggplot(df_wave_dm,
+                              aes(x = wave, y = footfall_dm)) +
+  geom_point(alpha = 0.2, size = 0.6) +
+  geom_smooth(method = "loess", se = FALSE) +
+  labs(
+    title = "Time Trend: Demeaned Footfall (Store-Level, All Points)",
+    x = "Wave (Continuous FY Year + Week)",
+    y = "Demeaned Footfall"
+  ) +
+  theme_minimal()
+
+#-------------------------------------------------
+# 4. Scatter: wave vs demeaned NOB (all store-weeks)
+#-------------------------------------------------
+
+p_wave_nob_pts <- ggplot(df_wave_dm,
+                         aes(x = wave, y = nob_dm)) +
+  geom_point(alpha = 0.2, size = 0.6) +
+  geom_smooth(method = "loess", se = FALSE) +
+  labs(
+    title = "Time Trend: Demeaned NOB (Store-Level, All Points)",
+    x = "Wave (Continuous FY Year + Week)",
+    y = "Demeaned NOB"
+  ) +
+  theme_minimal()
+
+#-------------------------------------------------
+# 5. Save both plots as PNGs (prefix 19_ and 20_)
+#-------------------------------------------------
+
+out_folder <- "ppt_pics1"
+if (!dir.exists(out_folder)) dir.create(out_folder, recursive = TRUE)
+
+ggsave(
+  filename = "19_wave_vs_demeaned_footfall_points.png",
+  plot     = p_wave_footfall_pts,
+  path     = out_folder,
+  width    = 8,
+  height   = 5,
+  dpi      = 300
+)
+
+ggsave(
+  filename = "20_wave_vs_demeaned_nob_points.png",
+  plot     = p_wave_nob_pts,
+  path     = out_folder,
+  width    = 8,
+  height   = 5,
+  dpi      = 300
+)
+```
+
+
+```{r}
+df_sales <- read_excel("C:/Users/rahul/OneDrive - BITSoM/Desktop/PhD/ABFRL/R_directory/Data/Swayam_Sharma_Sales & Inven.xlsx", 
+    sheet = "SalesData")
+
+df_sales <- df_sales %>% clean_names()
+
+
+colnames(df_sales)
+```
+
+
+```{r}
+df_first12 <- df_sales 
+
+#-------------------------------------------------
+# 2. Build summary table
+#-------------------------------------------------
+
+col_summary <- tibble(
+  column_name = names(df_first12),
+  data_type   = sapply(df_first12, class),
+  unique_vals = df_first12 %>% map_int(~ n_distinct(.x, na.rm = TRUE)),
+  
+  # up to 10 distinct values
+  sample_unique = df_first12 %>%
+    map_chr(function(v){
+      vals <- unique(v)
+      vals <- vals[!is.na(vals)]
+      vals10 <- head(vals, 3)
+      paste(vals10, collapse = ", ")
+    })
+)
+
+# If a column has more than 10 uniques, append "... "
+col_summary <- col_summary %>%
+  mutate(
+    sample_unique = ifelse(
+      unique_vals > 10,
+      paste0(sample_unique, " ..."),
+      sample_unique
+    )
+  )
+
+#-------------------------------------------------
+# 3. Save table as PNG (prefix 21_)
+#-------------------------------------------------
+
+out_folder <- "ppt_pics1"
+if (!dir.exists(out_folder)) dir.create(out_folder, recursive = TRUE)
+
+png(
+  filename = file.path(out_folder, "21_col_summary.png"),
+  width = 2000,
+  height = 1200,
+  res = 150
+)
+
+grid.table(col_summary)
+
+dev.off()
+```
+
+```{r}
+
+df_sales_2025 <- df_sales %>%
+  filter(as.numeric(year) == 2025)
+
+product_option_counts <- df_sales_2025 %>%
+  group_by(new_simplified_product) %>%
+  summarise(
+    n_options = n_distinct(option_code),
+    .groups = "drop"
+  )
+
+#-------------------------------------------------
+# 3. Compute summary metrics
+#-------------------------------------------------
+
+# Helper: mode function
+get_mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+mean_opts   <- round(mean(product_option_counts$n_options), 2)
+median_opts <- round(median(product_option_counts$n_options), 2)
+mode_opts   <- get_mode(product_option_counts$n_options)
+min_opts    <- min(product_option_counts$n_options)
+max_opts    <- max(product_option_counts$n_options)
+
+product_min <- product_option_counts %>%
+  filter(n_options == min_opts) %>%
+  slice(1) %>%                     # in case of ties, just take one
+  pull(new_simplified_product)
+
+product_max <- product_option_counts %>%
+  filter(n_options == max_opts) %>%
+  slice(1) %>%
+  pull(new_simplified_product)
+
+summary_table <- data.frame(
+  Metric = c(
+    "Mean number of option_codes per product",
+    "Median number of option_codes per product",
+    "Mode number of option_codes per product",
+    "Minimum number of option_codes per product",
+    "Maximum number of option_codes per product",
+    "Product with minimum option_codes",
+    "Product with maximum option_codes"
+  ),
+  Value = c(
+    mean_opts,
+    median_opts,
+    mode_opts,
+    min_opts,
+    max_opts,
+    product_min,
+    product_max
+  ),
+  stringsAsFactors = FALSE
+)
+
+#-------------------------------------------------
+# 4. Save summary table as PNG (prefix 22_)
+#-------------------------------------------------
+
+out_folder <- "ppt_pics1"
+if (!dir.exists(out_folder)) {
+  dir.create(out_folder, recursive = TRUE)
+}
+
+png(
+  filename = file.path(out_folder, "22_product_option_descriptives_2025.png"),
+  width  = 2000,
+  height = 900,
+  res    = 150
+)
+
+gridExtra::grid.table(summary_table)
+
+dev.off()
+```
+
+```{r}
+top5_products <- product_option_counts %>%
+  arrange(desc(n_options)) %>%
+  slice_head(n = 5)
+
+#-------------------------------------------------
+# 4. Horizontal bar chart (largest on top)
+#-------------------------------------------------
+
+p_top5 <- ggplot(
+  top5_products,
+  aes(x = reorder(new_simplified_product, -n_options),  # note the minus sign
+      y = n_options)
+) +
+  geom_col(fill = "steelblue") +
+  geom_text(
+    aes(label = n_options),
+    hjust = -0.2,
+    size = 3
+  ) +
+  coord_flip() +
+  labs(
+    title = "Top 5 Products by Option Count (2025)",
+    x = "Product",
+    y = "Number of Option Codes"
+  ) +
+  theme_minimal()
+
+#-------------------------------------------------
+# 5. Save PNG (prefix 23_)
+#-------------------------------------------------
+
+out_folder <- "ppt_pics1"
+if (!dir.exists(out_folder)) {
+  dir.create(out_folder, recursive = TRUE)
+}
+
+ggsave(
+  filename = "23_top5_products_option_count.png",
+  plot     = p_top5,
+  path     = out_folder,
+  width    = 9,
+  height   = 5,
+  dpi      = 300
+)
+```
+
+
+```{r}
+#-------------------------------------------------
+# 2. Brand-level totals for NSV and QTY
+#-------------------------------------------------
+
+brand_summ <- df_sales_2025 %>%
+  group_by(new_brand_description) %>%
+  summarise(
+    total_nsv = sum(sales_nsv, na.rm = TRUE),
+    total_qty = sum(sales_qty, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#-------------------------------------------------
+# Helper: mode function
+#-------------------------------------------------
+
+get_mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+#=================================================
+# PART A — NSV Summary Metrics
+#=================================================
+
+mean_nsv   <- round(mean(brand_summ$total_nsv), 2)
+median_nsv <- round(median(brand_summ$total_nsv), 2)
+mode_nsv   <- get_mode(brand_summ$total_nsv)
+min_nsv    <- min(brand_summ$total_nsv)
+max_nsv    <- max(brand_summ$total_nsv)
+
+brand_low_nsv <- brand_summ %>%
+  filter(total_nsv == min_nsv) %>%
+  slice(1) %>%
+  pull(new_brand_description)
+
+brand_high_nsv <- brand_summ %>%
+  filter(total_nsv == max_nsv) %>%
+  slice(1) %>%
+  pull(new_brand_description)
+
+summary_nsv <- data.frame(
+  Metric = c(
+    "Mean NSV per brand",
+    "Median NSV per brand",
+    "Mode NSV per brand",
+    "Minimum NSV per brand",
+    "Maximum NSV per brand",
+    "Brand with lowest NSV",
+    "Brand with highest NSV"
+  ),
+  Value = c(
+    mean_nsv,
+    median_nsv,
+    mode_nsv,
+    min_nsv,
+    max_nsv,
+    brand_low_nsv,
+    brand_high_nsv
+  ),
+  stringsAsFactors = FALSE
+)
+
+# Save PNG prefix 24_
+out_folder <- "ppt_pics1"
+if (!dir.exists(out_folder)) dir.create(out_folder, recursive = TRUE)
+
+png(
+  filename = file.path(out_folder, "24_brand_nsv_summary.png"),
+  width  = 2000,
+  height = 900,
+  res    = 150
+)
+
+gridExtra::grid.table(summary_nsv)
+
+dev.off()
+
+
+#=================================================
+# PART B — QTY Summary Metrics
+#=================================================
+
+mean_qty   <- round(mean(brand_summ$total_qty), 2)
+median_qty <- round(median(brand_summ$total_qty), 2)
+mode_qty   <- get_mode(brand_summ$total_qty)
+min_qty    <- min(brand_summ$total_qty)
+max_qty    <- max(brand_summ$total_qty)
+
+brand_low_qty <- brand_summ %>%
+  filter(total_qty == min_qty) %>%
+  slice(1) %>%
+  pull(new_brand_description)
+
+brand_high_qty <- brand_summ %>%
+  filter(total_qty == max_qty) %>%
+  slice(1) %>%
+  pull(new_brand_description)
+
+summary_qty <- data.frame(
+  Metric = c(
+    "Mean QTY per brand",
+    "Median QTY per brand",
+    "Mode QTY per brand",
+    "Minimum QTY per brand",
+    "Maximum QTY per brand",
+    "Brand with lowest QTY",
+    "Brand with highest QTY"
+  ),
+  Value = c(
+    mean_qty,
+    median_qty,
+    mode_qty,
+    min_qty,
+    max_qty,
+    brand_low_qty,
+    brand_high_qty
+  ),
+  stringsAsFactors = FALSE
+)
+
+# Save PNG prefix 25_
+png(
+  filename = file.path(out_folder, "25_brand_qty_summary.png"),
+  width  = 2000,
+  height = 900,
+  res    = 150
+)
+
+gridExtra::grid.table(summary_qty)
+
+dev.off()
+```
+
+```{r}
+
+
+#-------------------------------------------------
+# 1. Use only 2025 data
+#-------------------------------------------------
+
+df_sales_2025 <- df_sales %>%
+  filter(as.numeric(year) == 2025)
+type_sales_summary <- df_sales_2025 %>%
+  group_by(type) %>%
+  summarise(
+    total_nsv  = sum(sales_nsv, na.rm = TRUE),
+    total_qty  = sum(sales_qty, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(total_nsv))
+
+#-------------------------------------------------
+# 3. Save summary df as PNG (prefix 26_)
+#-------------------------------------------------
+
+out_folder <- "ppt_pics1"
+if (!dir.exists(out_folder)) dir.create(out_folder, recursive = TRUE)
+
+png(
+  filename = file.path(out_folder, "26_type_vs_sales_summary.png"),
+  width  = 1600,
+  height = 900,
+  res    = 150
+)
+
+gridExtra::grid.table(type_sales_summary)
+
+dev.off()
+```
+
+
+
+
+
+
+```{r}
+pyramid_sales_summary <- df_sales_2025 %>%
+  group_by(fashion_pyramid) %>%
+  summarise(
+    total_nsv = sum(sales_nsv, na.rm = TRUE),
+    total_qty = sum(sales_qty, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(total_nsv))    # sorted so most valuable pyramid is on top
+
+#-------------------------------------------------
+# 3. Save summary df as PNG (prefix 27_)
+#-------------------------------------------------
+
+out_folder <- "ppt_pics1"
+if (!dir.exists(out_folder)) dir.create(out_folder, recursive = TRUE)
+
+png(
+  filename = file.path(out_folder, "27_fashion_pyramid_vs_sales_summary.png"),
+  width  = 1800,
+  height = 1100,
+  res    = 150
+)
+
+gridExtra::grid.table(pyramid_sales_summary)
+
+dev.off()
+```
+
+```{r}
+ag_sales_summary <- df_sales_2025 %>%
+  group_by(ag_description) %>%
+  summarise(
+    total_nsv = sum(sales_nsv, na.rm = TRUE),
+    total_qty = sum(sales_qty, na.rm = TRUE),
+    .groups   = "drop"
+  )
+
+#-------------------------------------------------
+# 3. Create two ordered views:
+#    - By NSV
+#    - By QTY
+#-------------------------------------------------
+
+ag_nsv_summary <- ag_sales_summary %>%
+  arrange(desc(total_nsv))
+
+ag_qty_summary <- ag_sales_summary %>%
+  arrange(desc(total_qty))
+
+#-------------------------------------------------
+# 4. Save both tables as PNGs (prefix 28_ and 29_)
+#-------------------------------------------------
+
+out_folder <- "ppt_pics1"
+if (!dir.exists(out_folder)) {
+  dir.create(out_folder, recursive = TRUE)
+}
+
+# 28_ — ordered by NSV
+png(
+  filename = file.path(out_folder, "28_ag_description_summary.png"),
+  width  = 2200,
+  height = 1400,
+  res    = 150
+)
+gridExtra::grid.table(ag_nsv_summary)
+dev.off()
+
+
+```
+
+```{r}
+
+#-------------------------------------------------
+# 2. Aggregate NSV & QTY per new_simplified_product
+#-------------------------------------------------
+
+product_sales <- df_sales_2025 %>%
+  group_by(new_simplified_product) %>%
+  summarise(
+    total_nsv = sum(sales_nsv, na.rm = TRUE),
+    total_qty = sum(sales_qty, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#-------------------------------------------------
+# Helper: mode function
+#-------------------------------------------------
+
+get_mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+#=================================================
+# PART A — NSV Descriptives
+#=================================================
+
+mean_nsv   <- round(mean(product_sales$total_nsv), 2)
+median_nsv <- round(median(product_sales$total_nsv), 2)
+mode_nsv   <- get_mode(product_sales$total_nsv)
+min_nsv    <- min(product_sales$total_nsv)
+max_nsv    <- max(product_sales$total_nsv)
+
+product_low_nsv <- product_sales %>%
+  filter(total_nsv == min_nsv) %>%
+  slice(1) %>% pull(new_simplified_product)
+
+product_high_nsv <- product_sales %>%
+  filter(total_nsv == max_nsv) %>%
+  slice(1) %>% pull(new_simplified_product)
+
+summary_nsv <- data.frame(
+  Metric = c(
+    "Mean NSV per product",
+    "Median NSV per product",
+    "Mode NSV per product",
+    "Minimum NSV per product",
+    "Maximum NSV per product",
+    "Product with lowest NSV",
+    "Product with highest NSV"
+  ),
+  Value = c(
+    mean_nsv,
+    median_nsv,
+    mode_nsv,
+    min_nsv,
+    max_nsv,
+    product_low_nsv,
+    product_high_nsv
+  ),
+  stringsAsFactors = FALSE
+)
+
+#=================================================
+# PART B — QTY Descriptives
+#=================================================
+
+mean_qty   <- round(mean(product_sales$total_qty), 2)
+median_qty <- round(median(product_sales$total_qty), 2)
+mode_qty   <- get_mode(product_sales$total_qty)
+min_qty    <- min(product_sales$total_qty)
+max_qty    <- max(product_sales$total_qty)
+
+product_low_qty <- product_sales %>%
+  filter(total_qty == min_qty) %>%
+  slice(1) %>% pull(new_simplified_product)
+
+product_high_qty <- product_sales %>%
+  filter(total_qty == max_qty) %>%
+  slice(1) %>% pull(new_simplified_product)
+
+summary_qty <- data.frame(
+  Metric = c(
+    "Mean QTY per product",
+    "Median QTY per product",
+    "Mode QTY per product",
+    "Minimum QTY per product",
+    "Maximum QTY per product",
+    "Product with lowest QTY",
+    "Product with highest QTY"
+  ),
+  Value = c(
+    mean_qty,
+    median_qty,
+    mode_qty,
+    min_qty,
+    max_qty,
+    product_low_qty,
+    product_high_qty
+  ),
+  stringsAsFactors = FALSE
+)
+
+
+#-------------------------------------------------
+# 3. Export both as PNGs (prefixes 29_ and 30_)
+#-------------------------------------------------
+
+out_folder <- "ppt_pics1"
+if (!dir.exists(out_folder)) dir.create(out_folder, recursive = TRUE)
+
+# --- NSV table (29_) ---
+png(
+  filename = file.path(out_folder, "29_newsimplifiedproduct_nsv_descriptives.png"),
+  width  = 2000,
+  height = 1000,
+  res    = 150
+)
+gridExtra::grid.table(summary_nsv)
+dev.off()
+
+# --- QTY table (30_) ---
+png(
+  filename = file.path(out_folder, "30_newsimplifiedproduct_qty_descriptives.png"),
+  width  = 2000,
+  height = 1000,
+  res    = 150
+)
+gridExtra::grid.table(summary_qty)
+dev.off()
+
+```
+
+```{r}
+
+# Folder containing your images
+img_dir <- "ppt_pics1"
+
+# 1. List all image files (PNG/JPG)
+img_files <- list.files(
+  path    = img_dir,
+  pattern = "\\.(png|jpe?g)$",
+  full.names = TRUE
+)
+
+if (length(img_files) == 0) {
+  stop("No PNG/JPG files found in folder: ", img_dir)
+}
+
+# 2. Build data frame for sorting and titles
+df_imgs <- data.frame(
+  path = img_files,
+  file = basename(img_files),
+  stringsAsFactors = FALSE
+)
+
+# Extract prefix before first underscore (e.g. "9", "9b", "14", etc.)
+df_imgs$prefix <- sub("_.*$", "", df_imgs$file)
+
+# Numeric part: leading digits
+df_imgs$number <- as.integer(str_extract(df_imgs$prefix, "^[0-9]+"))
+
+# Suffix: whatever is left after leading digits (no lookbehind)
+df_imgs$suffix <- sub("^[0-9]+", "", df_imgs$prefix)
+df_imgs$suffix[is.na(df_imgs$suffix)] <- ""
+
+# Sort first by number, then by suffix, then by filename
+df_imgs <- df_imgs[order(df_imgs$number, df_imgs$suffix, df_imgs$file), ]
+
+# 3. Build slide titles
+#    - Drop everything before the first underscore
+#    - Drop extension
+#    - Replace underscores with spaces
+#    - Title-case each word
+df_imgs$title_raw <- ifelse(
+  grepl("_", df_imgs$file),
+  sub("^[^_]*_", "", df_imgs$file),  # keep after first underscore
+  df_imgs$file
+)
+
+df_imgs$title_raw <- sub("\\.[^.]+$", "", df_imgs$title_raw)  # drop extension
+df_imgs$title_raw <- gsub("_", " ", df_imgs$title_raw)        # underscores → spaces
+
+df_imgs$title <- str_to_title(df_imgs$title_raw)
+
+# 4. Create PowerPoint and add one slide per image
+ppt <- read_pptx()
+
+# If you want to see available layouts:
+# layout_summary(ppt)
+
+for (i in seq_len(nrow(df_imgs))) {
+  ppt <- add_slide(ppt, layout = "Title and Content", master = "Office Theme")
+  
+  # Add title
+  ppt <- ph_with(
+    ppt,
+    value    = df_imgs$title[i],
+    location = ph_location_type(type = "title")
+  )
+  
+  # Add picture (body placeholder)
+  ppt <- ph_with(
+    ppt,
+    value    = external_img(df_imgs$path[i]),
+    location = ph_location_type(type = "body")
+  )
+}
+
+# 5. Save the PPT
+print(ppt, target = "ppt_pics1_deck.pptx")
+
+```
+
+
+```{r}
+df_inventory <- read_excel("C:/Users/rahul/OneDrive - BITSoM/Desktop/PhD/ABFRL/R_directory/Data/Swayam_Sharma_Sales & Inven.xlsx", 
+    sheet = "InvenData")
+
+df_inventory <- df_inventory %>% clean_names()
+colnames(df_inventory)
+
+```
+
+```{r}
+
+df_wave <- df_inventory %>%
+  # Drop rows where week or fy_year is missing
+  filter(!is.na(year), !is.na(week)) %>%
+  mutate(
+    # Extract numeric week index from "Week01", "Week02", ...
+    week_num = as.integer(str_remove(week, "^Week")),
+    # Make sure fy_year is numeric; if it's a factor/character, convert
+    fy_year_num = as.numeric(as.character(year))
+  )
+
+
+# Handle case where conversion fails
+if (any(is.na(df_wave$fy_year_num))) {
+  stop("year could not be safely converted to numeric. Check its format.")
+}
+
+# Get max week and min year to build continuous wave index
+max_week   <- max(df_wave$week_num, na.rm = TRUE)
+min_year   <- min(df_wave$fy_year_num, na.rm = TRUE)
+df_wave <- df_wave %>%
+  mutate(
+    wave = (fy_year_num - min_year) * max_week + week_num
+  )
+
+
+
+
+```
+
+```{r}
+
+
+df_inventory_2025 <- df_inventory %>%
+  filter(as.numeric(year) == 2025)
+```
+
+
+```{r}
+
+
+```
+
